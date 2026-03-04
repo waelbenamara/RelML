@@ -3,6 +3,107 @@
 RelML is a C++ implementation of Relational Deep Learning for relational databases. Its purpose is to answer **predictive queries** — questions whose answers are not stored in any table and cannot be derived by any SQL expression, but can be learned from the relational structure of the database itself.
 
 
+## Running Example: MovieLens 1M
+
+Throughout this documentation we use a slice of the MovieLens 1M dataset to ground every concept concretely. The schema has three tables linked by two foreign-key relationships.
+
+### Schema and relationships
+
+```mermaid
+erDiagram
+    users {
+        int    userId       PK
+        string gender
+        int    age
+        int    occupation
+        string zip
+    }
+
+    movies {
+        int    movieId      PK
+        string title
+        string genres
+    }
+
+    ratings {
+        int    ratingId     PK
+        int    userId       FK
+        int    movieId      FK
+        float  rating
+        int    timestamp
+    }
+
+    users   ||--o{ ratings : "userId"
+    movies  ||--o{ ratings : "movieId"
+```
+
+### Sample data
+
+**users**
+
+```mermaid
+block-beta
+  columns 5
+  A["userId"]:1 B["gender"]:1 C["age"]:1 D["occupation"]:1 E["zip"]:1
+  A1["1"]:1     B1["F"]:1     C1["1"]:1  D1["10"]:1        E1["48067"]:1
+  A2["2"]:1     B2["M"]:1     C2["56"]:1 D2["16"]:1        E2["70072"]:1
+  A3["3"]:1     B3["M"]:1     C3["25"]:1 D3["15"]:1        E3["55117"]:1
+```
+
+**movies**
+
+```mermaid
+block-beta
+  columns 3
+  A["movieId"]:1 B["title"]:1                  C["genres"]:1
+  A1["1"]:1      B1["Toy Story (1995)"]:1       C1["Animation|Children's|Comedy"]:1
+  A2["2"]:1      B2["Jumanji (1995)"]:1         C2["Adventure|Children's|Fantasy"]:1
+```
+
+**ratings**
+
+```mermaid
+block-beta
+  columns 5
+  A["ratingId"]:1 B["userId"]:1 C["movieId"]:1 D["rating"]:1 E["timestamp"]:1
+  A1["0"]:1       B1["1"]:1     C1["1"]:1       D1["5"]:1     E1["978300760"]:1
+  A2["1"]:1       B2["1"]:1     C2["2"]:1       D2["3"]:1     E2["978302109"]:1
+  A3["2"]:1       B3["2"]:1     C3["1"]:1       D3["4"]:1     E3["978301968"]:1
+  A4["3"]:1       B4["3"]:1     C4["2"]:1       D4["2"]:1     E4["978300275"]:1
+```
+
+### How the tables connect as a graph
+
+Every row becomes a node. Every FK value becomes a directed edge. The graph that emerges from the three tables above looks like this:
+
+```mermaid
+graph LR
+    U1(["U1 · F, age=1"])
+    U2(["U2 · M, age=56"])
+    U3(["U3 · M, age=25"])
+
+    M1(["M1 · Toy Story"])
+    M2(["M2 · Jumanji"])
+
+    R0{{"R0 · 5★"}}
+    R1{{"R1 · 3★"}}
+    R2{{"R2 · 4★"}}
+    R3{{"R3 · 2★"}}
+
+    R0 -->|userId| U1
+    R1 -->|userId| U1
+    R2 -->|userId| U2
+    R3 -->|userId| U3
+
+    R0 -->|movieId| M1
+    R1 -->|movieId| M2
+    R2 -->|movieId| M1
+    R3 -->|movieId| M2
+```
+
+Circles are user nodes, diamonds are rating nodes, rectangles are movie nodes. The GNN uses these edges to propagate information: after two message-passing layers, each rating node's embedding encodes not just its own star value and timestamp, but also the profile of the user who gave it, what other movies that user has rated, and how other users have responded to the same movie.
+
+
 ## The Problem: The Ceiling of SQL
 
 A relational database stores entities and their interactions as tables linked by foreign-key constraints. SQL — and more specifically the Select-Project-Join (SPJ) fragment that underlies virtually all query answering — is the language of *retrieval*. It filters rows, joins tables, and computes aggregates over data that already exists.
@@ -69,7 +170,7 @@ ORDER  BY timestamp
 
 Run this query in DuckDB or PostgreSQL and you have the task table as a CSV or an in-memory result. RelML reads it, builds the graph over the full schema, trains the GNN, and produces predictions. The database engine handles what it does well — storage, retrieval, joins, aggregation, label computation — and RelML handles what it cannot: learning from relational structure to answer questions about unseen or future rows.
 
-This means the boundary between the two systems is clean and explicit. Everything that can be expressed as SPJ stays in the database engine. Everything that requires learning from graph structure goes to RelML. The TaskSpec in RelML is simply the C++ materialization of that SQL query — it selects the target table, computes the label transform, and orders rows by the time column, exactly mirroring what the SQL above does.
+This means the boundary between the two systems is clean and explicit. Everything that can be expressed as SPJ stays in the database engine. Everything that requires learning from graph structure goes to RelML. The `TaskSpec` in RelML is simply the C++ materialization of that SQL query — it selects the target table, computes the label transform, and orders rows by the time column, exactly mirroring what the SQL above does.
 
 In a future version, the current C++ database layer — which reimplements CSV loading, type inference, and FK detection — would be replaced by a direct DuckDB connection, so that the task table SQL query is executed natively and its result is handed directly to the encoder without any intermediate representation. The GNN, prediction head, trainer, and optimizer would remain unchanged. The learning stack is already complete; only the data ingestion layer would change.
 
@@ -181,7 +282,17 @@ spec.entity_refs               = {{"userId", "1"}, {"movieId", "1193"}};
 TaskSplit split = spec.build_split(db);
 ```
 
-`build_split` materializes the task table: it reads the rating column, applies the threshold to produce 0/1 labels, sorts all rows by timestamp, and cuts at 70% and 85% to produce train, val, and test sets.
+`build_split` materializes the task table: it reads the rating column, applies the threshold to produce 0/1 labels, sorts all rows by timestamp, and cuts at 70% and 85% to produce train, val, and test sets. For the sample data above, the resulting task table looks like this:
+
+```mermaid
+block-beta
+  columns 4
+  A["ratingId"]:1 B["label"]:1 C["split"]:1    D["note"]:1
+  A1["2"]:1       B1["1"]:1    C1["train"]:1    D1["earliest timestamp"]:1
+  A2["0"]:1       B2["1"]:1    C2["train"]:1    D2["rating=5 >= 4"]:1
+  A3["3"]:1       B3["0"]:1    C3["val"]:1      D3["rating=2 < 4"]:1
+  A4["1"]:1       B4["0"]:1    C4["test"]:1     D4["latest timestamp"]:1
+```
 
 **Step 4: Configure and train.**
 
