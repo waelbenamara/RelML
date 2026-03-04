@@ -1,0 +1,12 @@
+# RelBench benchmark for MovieLens 1M (same setup as relml C++ example)
+#
+# Requires Python >= 3.10 for relbench 2.x. If you have Python 3.8 or 3.9, use:
+#   pip install "relbench>=0.2.0,<2.0" pandas numpy
+#
+# Core (dataset + task + metrics only):
+relbench
+pandas>=1.5.0
+numpy>=1.23.0
+
+# Optional: GNN modeling (PyTorch, PyG, torch-frame). Requires Python >= 3.10 for relbench 2.x:
+# pip install relbench[full]

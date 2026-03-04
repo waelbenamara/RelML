@@ -1,0 +1,28 @@
+# Data folders
+*-data/
+
+# Script and generated code
+collect_code.sh
+all_code.txt
+
+# Environment and secrets
+.env
+.env.*
+
+# Build
+build/
+
+# Python
+myenv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+venv/
+.venv/
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
