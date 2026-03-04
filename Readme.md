@@ -103,6 +103,21 @@ graph LR
 
 Circles are user nodes, diamonds are rating nodes, rectangles are movie nodes. The GNN uses these edges to propagate information: after two message-passing layers, each rating node's embedding encodes not just its own star value and timestamp, but also the profile of the user who gave it, what other movies that user has rated, and how other users have responded to the same movie.
 
+### Example: training metrics (H&M churn)
+
+Running `./hm_churn ../rel-hm-data` on the H&M dataset produces training curves like the following (train loss, validation AP, AUC, and accuracy over 20 epochs):
+
+```mermaid
+xychart-beta
+  title "Training Metrics Over Epochs"
+  x-axis [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+  y-axis "Value" 0 --> 1.05
+  line "Train Loss" [0.055834, 0.053313, 0.051274, 0.049048, 0.047115, 0.044978, 0.043192, 0.041408, 0.039615, 0.037955, 0.036397, 0.034838, 0.033446, 0.031967, 0.030726, 0.029273, 0.028077, 0.026828, 0.025679, 0.024487]
+  line "Val AP" [0.9999, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000]
+  line "Val AUC" [0.9979, 0.9988, 0.9994, 0.9996, 0.9998, 0.9999, 0.9999, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000]
+  line "Val Acc" [0.7374, 0.7713, 0.8244, 0.8668, 0.8877, 0.9067, 0.9198, 0.9317, 0.9440, 0.9553, 0.9638, 0.9713, 0.9767, 0.9806, 0.9840, 0.9869, 0.9892, 0.9909, 0.9923, 0.9935]
+```
+
 
 ## The Problem: The Ceiling of SQL
 
@@ -503,44 +518,6 @@ ml-1m-data/          rel-hm-data/
     users.csv             customer.csv
     movies.csv            article.csv
     ratings.csv           transactions.csv
-```
-
-### Example: training metrics (H&M churn)
-
-Running `./hm_churn ../rel-hm-data` produces training curves like the following (train loss, validation AP, AUC, and accuracy over 20 epochs):
-
-```mermaid
-xychart-beta
-  title "Training Metrics Over Epochs"
-
-  x-axis [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-          11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-
-  y-axis "Value" 0 --> 1.05
-
-  %% Train Loss
-  line [0.055834, 0.053313, 0.051274, 0.049048, 0.047115,
-        0.044978, 0.043192, 0.041408, 0.039615, 0.037955,
-        0.036397, 0.034838, 0.033446, 0.031967, 0.030726,
-        0.029273, 0.028077, 0.026828, 0.025679, 0.024487]
-
-  %% Val AP
-  line [0.9999, 1.0000, 1.0000, 1.0000, 1.0000,
-        1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
-        1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
-        1.0000, 1.0000, 1.0000, 1.0000, 1.0000]
-
-  %% Val AUC
-  line [0.9979, 0.9988, 0.9994, 0.9996, 0.9998,
-        0.9999, 0.9999, 1.0000, 1.0000, 1.0000,
-        1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
-        1.0000, 1.0000, 1.0000, 1.0000, 1.0000]
-
-  %% Val Acc
-  line [0.7374, 0.7713, 0.8244, 0.8668, 0.8877,
-        0.9067, 0.9198, 0.9317, 0.9440, 0.9553,
-        0.9638, 0.9713, 0.9767, 0.9806, 0.9840,
-        0.9869, 0.9892, 0.9909, 0.9923, 0.9935]
 ```
 
 
