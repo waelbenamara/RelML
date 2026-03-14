@@ -286,8 +286,8 @@ int main(int argc, char* argv[]) {
     cfg.dropout    = 0.3f;
     cfg.lr         = 3e-4f;
     cfg.pos_weight = 1.f;   // auto-rebalanced inside Trainer::fit based on class ratio
-    cfg.epochs     = 30;
-    cfg.batch_size = 4096;
+    cfg.epochs     = 6;
+    cfg.batch_size = 10000;
     cfg.task       = spec;
 
     std::cout << "\nBuilding Trainer...\n";

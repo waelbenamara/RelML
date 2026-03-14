@@ -12,15 +12,20 @@ void EvalMetrics::print(const std::string& prefix) const {
     std::cout << prefix << "\n"
               << "  loss              : " << std::fixed << std::setprecision(4) << loss << "\n";
 
-    // Print classification fields only if they contain meaningful values
+    // Binary classification fields
     if (average_precision > 0.f || roc_auc > 0.f) {
         std::cout << "  average_precision : " << average_precision << "\n"
                   << "  roc_auc           : " << roc_auc           << "\n"
                   << "  accuracy          : " << accuracy          << "\n"
                   << "  f1                : " << f1                << "\n";
     }
+    // Multiclass fields (accuracy/f1 populated but AP/AUC are zero)
+    else if (accuracy > 0.f || f1 > 0.f) {
+        std::cout << "  accuracy          : " << accuracy          << "\n"
+                  << "  f1                : " << f1                << "\n";
+    }
 
-    // Print regression fields only if populated
+    // Regression fields
     if (rmse > 0.f || mae > 0.f) {
         std::cout << "  rmse              : " << rmse     << "\n"
                   << "  mae               : " << mae      << "\n"
@@ -111,7 +116,6 @@ EvalMetrics compute_regression_metrics(
     float rmse = static_cast<float>(std::sqrt(sum_se / N));
     float mae  = static_cast<float>(sum_ae / N);
 
-    // R² = 1 - SS_res / SS_tot
     double mean_y  = sum_y / N;
     double ss_tot  = sum_y2 - N * mean_y * mean_y;
     float  r2      = (ss_tot > 1e-12) ? static_cast<float>(1.0 - sum_se / ss_tot) : 0.f;

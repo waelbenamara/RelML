@@ -1,317 +1,378 @@
-# RelML
+# Creating a Task in RelML
 
-RelML is a C++ implementation of Relational Deep Learning for relational databases. Its purpose is to answer **predictive queries** — questions whose answers are not stored in any table and cannot be derived by any SQL expression, but can be learned from the relational structure of the database itself.
+This document explains how to take a raw relational database, define a
+prediction task, and train a model. Every example in `src/example_tasks/`
+follows this exact pattern.
 
+---
 
-## Running Example: MovieLens 1M
+## The five steps
 
-Throughout this documentation we use a slice of the MovieLens 1M dataset to ground every concept concretely. The schema has three tables linked by two foreign-key relationships.
+1. Load the CSV files and declare the schema
+2. Detect foreign keys
+3. Build the heterogeneous graph
+4. Define the task (the part that requires the most thought)
+5. Train and run inference
 
-### Schema and relationships
+---
 
-```mermaid
-erDiagram
-    users {
-        int    userId       PK
-        string gender
-        int    age
-        int    occupation
-        string zip
-    }
-
-    movies {
-        int    movieId      PK
-        string title
-        string genres
-    }
-
-    ratings {
-        int    ratingId     PK
-        int    userId       FK
-        int    movieId      FK
-        float  rating
-        int    timestamp
-    }
-
-    users   ||--o{ ratings : "userId"
-    movies  ||--o{ ratings : "movieId"
-```
-
-### Sample data
-
-**users**
-
-```mermaid
-block-beta
-  columns 5
-  A["userId"]:1 B["gender"]:1 C["age"]:1 D["occupation"]:1 E["zip"]:1
-  A1["1"]:1     B1["F"]:1     C1["1"]:1  D1["10"]:1        E1["48067"]:1
-  A2["2"]:1     B2["M"]:1     C2["56"]:1 D2["16"]:1        E2["70072"]:1
-  A3["3"]:1     B3["M"]:1     C3["25"]:1 D3["15"]:1        E3["55117"]:1
-```
-
-**movies**
-
-```mermaid
-block-beta
-  columns 3
-  A["movieId"]:1 B["title"]:1                  C["genres"]:1
-  A1["1"]:1      B1["Toy Story (1995)"]:1       C1["Animation|Children's|Comedy"]:1
-  A2["2"]:1      B2["Jumanji (1995)"]:1         C2["Adventure|Children's|Fantasy"]:1
-```
-
-**ratings**
-
-```mermaid
-block-beta
-  columns 5
-  A["ratingId"]:1 B["userId"]:1 C["movieId"]:1 D["rating"]:1 E["timestamp"]:1
-  A1["0"]:1       B1["1"]:1     C1["1"]:1       D1["5"]:1     E1["978300760"]:1
-  A2["1"]:1       B2["1"]:1     C2["2"]:1       D2["3"]:1     E2["978302109"]:1
-  A3["2"]:1       B3["2"]:1     C3["1"]:1       D3["4"]:1     E3["978301968"]:1
-  A4["3"]:1       B4["3"]:1     C4["2"]:1       D4["2"]:1     E4["978300275"]:1
-```
-
-### How the tables connect as a graph
-
-Every row becomes a node. Every FK value becomes a directed edge. The graph that emerges from the three tables above looks like this:
-
-```mermaid
-graph LR
-    U1(["U1 · F, age=1"])
-    U2(["U2 · M, age=56"])
-    U3(["U3 · M, age=25"])
-
-    M1(["M1 · Toy Story"])
-    M2(["M2 · Jumanji"])
-
-    R0{{"R0 · 5★"}}
-    R1{{"R1 · 3★"}}
-    R2{{"R2 · 4★"}}
-    R3{{"R3 · 2★"}}
-
-    R0 -->|userId| U1
-    R1 -->|userId| U1
-    R2 -->|userId| U2
-    R3 -->|userId| U3
-
-    R0 -->|movieId| M1
-    R1 -->|movieId| M2
-    R2 -->|movieId| M1
-    R3 -->|movieId| M2
-```
-
-Circles are user nodes, diamonds are rating nodes, rectangles are movie nodes. The GNN uses these edges to propagate information: after two message-passing layers, each rating node's embedding encodes not just its own star value and timestamp, but also the profile of the user who gave it, what other movies that user has rated, and how other users have responded to the same movie.
-
-### Example: training metrics (H&M churn)
-
-Running `./hm_churn ../rel-hm-data` on the H&M dataset produces training curves like the following (train loss, validation AP, AUC, and accuracy over 20 epochs):
-
-```mermaid
-xychart-beta
-  title "Training Metrics Over Epochs"
-  x-axis [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-  y-axis "Value" 0 --> 1.05
-  line "Train Loss" [0.055834, 0.053313, 0.051274, 0.049048, 0.047115, 0.044978, 0.043192, 0.041408, 0.039615, 0.037955, 0.036397, 0.034838, 0.033446, 0.031967, 0.030726, 0.029273, 0.028077, 0.026828, 0.025679, 0.024487]
-  line "Val AP" [0.9999, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000]
-  line "Val AUC" [0.9979, 0.9988, 0.9994, 0.9996, 0.9998, 0.9999, 0.9999, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000]
-  line "Val Acc" [0.7374, 0.7713, 0.8244, 0.8668, 0.8877, 0.9067, 0.9198, 0.9317, 0.9440, 0.9553, 0.9638, 0.9713, 0.9767, 0.9806, 0.9840, 0.9869, 0.9892, 0.9909, 0.9923, 0.9935]
-```
-
-
-## The Problem: The Ceiling of SQL
-
-A relational database stores entities and their interactions as tables linked by foreign-key constraints. SQL — and more specifically the Select-Project-Join (SPJ) fragment that underlies virtually all query answering — is the language of *retrieval*. It filters rows, joins tables, and computes aggregates over data that already exists.
-
-SPJ has a hard ceiling. It cannot answer questions whose answers are not yet in the database. Consider the following queries:
-
-- *Which customers are likely to stop purchasing in the next 30 days?*
-- *Will user 5 enjoy movie 42?*
-- *How much will this transaction cost?*
-
-A text-to-SQL system handed the first question can, at best, return customers who have already stopped. It has no mechanism to *predict* who will. The answer to a predictive question is not stored anywhere and cannot be derived by any SQL expression, no matter how complex.
-
-There is a precise relationship between SPJ and prediction that is worth making explicit. **Defining** a prediction task always requires an SPJ query. The task is: take a set of entity rows, attach a label to each, and order them by time. That is a table, and a table is the output of a SELECT statement. We call this the *task table*. Three examples cover the range of questions RelML can answer.
-
-**Binary classification.** Will a given rating be positive (>= 4 stars)?
-
-```sql
-SELECT ratingId,
-       CAST(rating >= 4 AS INT) AS label
-FROM   ratings
-ORDER  BY timestamp
-```
-
-**Regression.** What is the expected purchase price for this transaction?
-
-```sql
-SELECT transactionId,
-       price AS label
-FROM   transactions
-ORDER  BY t_dat
-```
-
-**Link prediction.** Will customer u purchase article a in the next 7 days?
-
-```sql
-SELECT u.customer_id, a.article_id,
-       CAST(EXISTS(
-         SELECT 1 FROM transactions t
-         WHERE  t.customer_id = u.customer_id
-         AND    t.article_id  = a.article_id
-         AND    t.t_dat BETWEEN :cutoff AND :cutoff + INTERVAL 7 DAYS
-       ) AS INT) AS label
-FROM   customer u CROSS JOIN article a
-ORDER  BY :cutoff
-```
-
-In each case, the task table is entirely within SPJ. What SPJ cannot supply — and what RelML learns — is the label value for held-out or future rows. The label of a future rating is not in the database. Answering it requires generalizing from patterns spread across past ratings, users, and movies simultaneously.
-
-A **predictive query** therefore pairs a task table with a learned model that estimates the label for unseen entity instances, using all relational context available in the database. The context of a rating — the user who gave it, the movie it concerns, other movies the same user has rated, other users who rated the same movie — cannot be expressed in the target row alone. It must be gathered by traversing foreign-key links across the relational graph.
-
-
-## RelML as a Predictive Layer over Existing Database Engines
-
-The task table — the ordered list of entity rows paired with labels that defines the prediction problem — is a standard SQL query. It can be materialized by any existing database engine: DuckDB, PostgreSQL, SQLite, or any other system that supports SPJ. There is no new database required. The database you already have is sufficient to define and materialize the task.
-
-For example, the rating classification task table is produced by:
-
-```sql
-SELECT ratingId,
-       CAST(rating >= 4 AS INT) AS label
-FROM   ratings
-ORDER  BY timestamp
-```
-
-Run this query in DuckDB or PostgreSQL and you have the task table as a CSV or an in-memory result. RelML reads it, builds the graph over the full schema, trains the GNN, and produces predictions. The database engine handles what it does well — storage, retrieval, joins, aggregation, label computation — and RelML handles what it cannot: learning from relational structure to answer questions about unseen or future rows.
-
-This means the boundary between the two systems is clean and explicit. Everything that can be expressed as SPJ stays in the database engine. Everything that requires learning from graph structure goes to RelML. The `TaskSpec` in RelML is simply the C++ materialization of that SQL query — it selects the target table, computes the label transform, and orders rows by the time column, exactly mirroring what the SQL above does.
-
-In a future version, the current C++ database layer — which reimplements CSV loading, type inference, and FK detection — would be replaced by a direct DuckDB connection, so that the task table SQL query is executed natively and its result is handed directly to the encoder without any intermediate representation. The GNN, prediction head, trainer, and optimizer would remain unchanged. The learning stack is already complete; only the data ingestion layer would change.
-
-
-## How RelML Works
-
-RelML implements the Relational Deep Learning framework described in Robinson et al. (RelBench, NeurIPS 2024) and Hamilton et al. (GraphSAGE, NeurIPS 2017). The pipeline has four stages that run automatically once you define a task.
-
-**Stage 1: Schema and type inference.** Each column is assigned one of four types: NUMERICAL (z-score normalized), CATEGORICAL (one-hot encoded), TIMESTAMP (sin/cos cyclical decomposition), or TEXT (skipped). Types are inferred automatically from the data distribution and can be overridden per column in the schema declaration.
-
-**Stage 2: Graph construction.** Every row in every table becomes a node. Every foreign-key value becomes a directed edge from the source row to the referenced primary-key row. Reverse edges are added automatically so information flows in both directions. The result is a heterogeneous graph where node types correspond to tables and edge types correspond to FK relationships.
-
-**Stage 3: Relational message passing.** A multi-layer Graph SAGE network runs over the graph. Each layer allows every node to aggregate a summary of its neighbors' current embeddings. After L layers, each node's embedding encodes its own features plus the features of its entire L-hop relational neighborhood. A rating node after two layers implicitly encodes: the user's demographics, that user's full rating history, the movie's genre, and how other users have responded to that movie. None of this is written in the rating row itself.
-
-**Stage 4: Prediction head and training.** A small MLP head reads the final embedding of each target node and produces a prediction. All parameters — projection matrices, GNN weights, MLP head — are trained end-to-end with Adam. The best checkpoint on the validation set is restored before test evaluation.
-
-The value of relational context is empirical and substantial. On MovieLens 1M, a flat MLP that joins all three tables into one row per rating achieves a test AUC of 0.574 — barely above chance. RelML with two message-passing layers achieves 0.970. The gap is a direct measurement of what lives two relational hops away and is completely invisible to any single-row model.
-
-
-## Building the Project
-
-Requirements: a C++20 compiler, CMake >= 3.20, libcurl, and optionally OpenBLAS.
-
-```bash
-git clone <repo>
-cd relml
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-```
-
-To build a specific example task:
-
-```bash
-make ml1m_rating_classification -j$(nproc)
-make hm_churn -j$(nproc)
-```
-
-
-## Writing a Task: Complete Walkthrough
-
-Every task is a standalone `.cpp` file in `src/example_tasks/`. The minimum you need is three things: a schema, a `TaskSpec`, and a `TrainConfig`. RelML handles the rest.
-
-We walk through the MovieLens 1M rating classification task step by step.
-
-**Step 1: Declare the schema.**
-
-The schema tells RelML how to interpret each table. You only need to declare what cannot be inferred automatically: primary keys, time columns, and any column type overrides.
+## Step 1 — Load the CSV files
 
 ```cpp
 std::unordered_map<std::string, TableSchema> schemas = {
     {"users", {
-        .pkey_col     = "userId",
-        .time_col     = std::nullopt,
-        .foreign_keys = {},
+        .pkey_col     = "user_id",          // primary key column
+        .time_col     = std::nullopt,        // no timestamp on this table
+        .foreign_keys = {},                  // declared or auto-detected
         .columns      = {
-            {.name = "gender",     .type = ColumnType::CATEGORICAL},
-            {.name = "occupation", .type = ColumnType::CATEGORICAL},
-            {.name = "zip",        .type = ColumnType::TEXT},
+            // override only when type inference is wrong
+            {.name = "country", .type = ColumnType::CATEGORICAL},
+            {.name = "bio",     .type = ColumnType::TEXT},
         }
     }},
-    {"movies", {
-        .pkey_col = "movieId",
-        .time_col = std::nullopt,
-        .columns  = {
-            {.name = "title",  .type = ColumnType::TEXT},
-            {.name = "genres", .type = ColumnType::CATEGORICAL},
-        }
-    }},
-    {"ratings", {
-        .pkey_col     = "ratingId",
-        .time_col     = "timestamp",
+    {"orders", {
+        .pkey_col     = "order_id",
+        .time_col     = "created_at",        // used for temporal split
         .foreign_keys = {
-            {.column = "userId",  .target_table = "users"},
-            {.column = "movieId", .target_table = "movies"},
+            {.column = "user_id", .target_table = "users"},
         },
+        .columns = {}                        // all types inferred automatically
     }},
 };
+
+Database db = CSVLoader::load_database("./my-data", "mydb", schemas);
 ```
 
-**Step 2: Load the database, detect foreign keys, build the graph.**
+**Type inference rules.**
+`TypeInferrer` scans each column and assigns a type automatically:
+
+| What it sees | Assigned type |
+|---|---|
+| All values parse as numbers | `NUMERICAL` |
+| All values match `YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS` | `TIMESTAMP` |
+| String column with fewer than 5% unique values | `CATEGORICAL` |
+| String column with 5%+ unique values | `TEXT` |
+
+You only need to declare a column in `columns` when inference gets it wrong.
+For example, an `age` column stored as integers `{1, 18, 25, 35}` will infer
+as `NUMERICAL`. If those are actually bucket codes you want one-hot encoded,
+override it as `CATEGORICAL`.
+
+**What gets skipped by the encoder.**
+The primary key column is never encoded. `TEXT` columns are always skipped.
+`TIMESTAMP` columns declared as `time_col` are used for temporal splits but
+not encoded. Foreign key columns are used to build graph edges but their raw
+values (integer IDs) carry no semantic signal after z-scoring, so you should
+override them as `TEXT` on tables where the FK is the only column you do not
+want encoded.
+
+---
+
+## Step 2 — Detect foreign keys
 
 ```cpp
-Database    db    = CSVLoader::load_database(data_dir, "ml-1m", schemas);
 FKDetector::detect(db);
+```
+
+This writes FK relationships directly into each `Table::foreign_keys`. It
+uses two checks: the column name must match the pattern
+`singular(target_table) + "Id"` (e.g. `userId` → `users`) and at least 99%
+of non-null values must exist in the target table's primary key column.
+
+When auto-detection cannot find a FK — for example because the column is named
+`home_team_id` instead of `teamId` — declare it explicitly in the schema:
+
+```cpp
+.foreign_keys = {
+    {.column = "home_team_id", .target_table = "teams"},
+    {.column = "away_team_id", .target_table = "teams"},
+}
+```
+
+Running `FKDetector::detect` after explicit declarations is harmless: it
+skips columns that are already in `foreign_keys`.
+
+---
+
+## Step 3 — Build the graph
+
+```cpp
 HeteroGraph graph = GraphBuilder::build(db);
 graph.print_summary();
 ```
 
-After these three lines you have a heterogeneous graph with three node types and four edge types. The graph builder prints a summary showing node counts and edge counts per type.
+For every FK relationship it finds, `GraphBuilder` emits two edge types:
 
-**Step 3: Define the prediction task.**
+```
+orders --[user_id]--> users          (forward)
+users  --[rev_user_id]--> orders     (reverse)
+```
 
-The `TaskSpec` is the C++ materialization of the task table SQL query. It specifies what to predict, how to transform the label, how to split the data, and how to run inference.
+The reverse edges let a user node aggregate information from all its orders
+during message passing.
+
+---
+
+## Step 4 — Define the task
+
+This is where all the thought goes. A task has three components:
+
+**A. The target table and column**
+
+The table that contains one row per prediction unit. The column must be
+`NUMERICAL` and will be used as the label.
+
+**B. The label transform**
+
+How the raw column value is converted to a training label.
+
+| Kind | When to use | Example |
+|---|---|---|
+| `Threshold` | Binary classification on a numerical signal | rating >= 4 → positive |
+| `Normalize` | Regression | predict the raw value after z-scoring |
+| `Buckets` | Multiclass | outcome ∈ {0,1,2} from goals scored |
+
+**C. The split strategy**
+
+`Temporal` — sort rows by `time_col` and split 70/15/15. Use this whenever
+the table has a meaningful time ordering. It prevents future leakage.
+
+`Random` — deterministic Fisher-Yates shuffle. Use this when there is no
+meaningful time ordering (e.g. a synthetic task table you materialised).
+
+---
+
+## Task patterns
+
+### Pattern A — label already exists in a table
+
+The simplest case. A column in an existing table is directly the label.
 
 ```cpp
+// Predict whether a rating is >= 4 stars
 TaskSpec spec;
-spec.target_table              = "ratings";
-spec.target_column             = "rating";
-spec.task_type                 = TaskSpec::TaskType::BinaryClassification;
+spec.target_table  = "ratings";
+spec.target_column = "rating";
+spec.task_type     = TaskSpec::TaskType::BinaryClassification;
+
 spec.label_transform.kind      = LabelTransform::Kind::Threshold;
-spec.label_transform.threshold = 4.f;
-spec.label_transform.inclusive = true;        // rating >= 4 is positive
-spec.split_strategy            = TaskSpec::SplitStrategy::Temporal;
-spec.split_time_col            = "timestamp";
-spec.inference_mode            = TaskSpec::InferenceMode::EntitySynthesis;
-spec.entity_refs               = {{"userId", "1"}, {"movieId", "1193"}};
+spec.label_transform.threshold = 4.0f;
+spec.label_transform.inclusive = true;   // >= 4
+
+spec.split_strategy = TaskSpec::SplitStrategy::Temporal;
+spec.split_time_col = "timestamp";
+```
+
+### Pattern B — label must be injected
+
+The label does not exist in the database. You compute it and add it as a new
+column before calling `build_split`.
+
+```cpp
+// Predict whether a customer will churn (no purchase in last 7 days)
+static void inject_churn_label(Database& db) {
+    // find the latest timestamp in transactions
+    // compute cutoff = max_ts - 7 * 86400
+    // for each customer: label = 1 if last purchase <= cutoff, else 0
+    // add Column("will_churn", NUMERICAL) to the customers table
+}
+
+inject_churn_label(db);
+
+TaskSpec spec;
+spec.target_table  = "customers";
+spec.target_column = "will_churn";
+spec.task_type     = TaskSpec::TaskType::BinaryClassification;
+
+spec.label_transform.kind      = LabelTransform::Kind::Threshold;
+spec.label_transform.threshold = 0.5f;
+spec.label_transform.inclusive = true;
+
+spec.split_strategy = TaskSpec::SplitStrategy::Random;
+```
+
+**Critical:** after `build_split` reads the label column, flip its type to
+`TEXT` so `HeteroEncoder` does not encode it as a feature:
+
+```cpp
+TaskSplit split = spec.build_split(db);
+db.get_table("customers").get_column("will_churn").type = ColumnType::TEXT;
+```
+
+### Pattern C — the task table does not exist in the database
+
+Sometimes the right prediction unit is a pair or combination that has no
+corresponding table. You materialise it from an SPJA query on the existing
+tables, add it to the database, then treat it like any other table.
+
+```cpp
+// Predict whether user U will visit ad A in the next 4 days.
+// This requires a table UserAdCandidates(UserID, AdID, will_visit)
+// that does not exist in the raw database.
+
+static void build_user_ad_candidates(Database& db) {
+    // 1. find cutoff = max(ViewDate) - 4 * 86400
+    // 2. collect positive (UserID, AdID) pairs: appeared in VisitStream >= cutoff
+    // 3. for each active user: keep all positives + NEG_RATIO negatives
+    // 4. store as Table "UserAdCandidates" with FK → UserInfo, FK → AdsInfo
+    //    UserID and AdID as NUMERICAL (so GraphBuilder can resolve FKs)
+    //    will_visit as NUMERICAL (0 or 1)
+}
+
+build_user_ad_candidates(db);
+HeteroGraph graph = GraphBuilder::build(db);
+
+// After graph is built: flip FK columns to TEXT so encoder skips them.
+// Their only role was to carry edges. The integer IDs themselves are meaningless.
+db.get_table("UserAdCandidates").get_column("UserID").type = ColumnType::TEXT;
+db.get_table("UserAdCandidates").get_column("AdID").type   = ColumnType::TEXT;
+
+TaskSpec spec;
+spec.target_table  = "UserAdCandidates";
+spec.target_column = "will_visit";
+spec.task_type     = TaskSpec::TaskType::BinaryClassification;
+spec.split_strategy = TaskSpec::SplitStrategy::Random;
+// temporal logic already baked into the label derivation (the cutoff)
+```
+
+The key insight: the synthetic table has no self-features (FK columns are
+skipped). All signal flows through the FK edges during GNN message passing.
+For a row `(user U, ad A)`, the GNN embedding is dominated by
+`W_neigh_u * h_UserInfo[U] + W_neigh_a * h_AdsInfo[A]`. This means the model
+can score any `(user, ad)` pair at inference time, including ones the user has
+never interacted with.
+
+---
+
+## Step 5 — Train
+
+```cpp
+TrainConfig cfg;
+cfg.channels   = 64;     // embedding dimension for all nodes
+cfg.gnn_layers = 2;      // 2 is correct for most schemas
+cfg.hidden     = 64;     // MLP hidden layer size
+cfg.dropout    = 0.3f;   // set higher (0.5) for small datasets
+cfg.lr         = 3e-4f;
+cfg.pos_weight = 1.f;    // auto-rebalanced from training data
+cfg.epochs     = 20;
+cfg.batch_size = 0;      // 0 = full batch; set to 4096+ for large tables
+cfg.task       = spec;
+
+Trainer trainer(cfg, db, graph);
+trainer.fit(split, db, graph);
+```
+
+**Choosing `gnn_layers`.**
+Each layer expands the receptive field by one hop. 2 layers is correct for
+the vast majority of schemas. The useful signal is almost always within 2 hops
+(e.g. order → user → user features). Adding more layers causes over-smoothing:
+all node embeddings converge toward the same global average.
+
+**Choosing `channels`.**
+64 is a good default. Increase to 128 for large datasets with complex schemas.
+Decrease to 32 for small datasets prone to overfitting.
+
+**`pos_weight`.**
+Leave it at `1.f`. `Trainer::fit` automatically computes
+`pos_weight = n_neg / n_pos` from the training split and applies it to the
+BCE loss. For multiclass tasks it computes per-class inverse-frequency weights.
+
+---
+
+## Inference
+
+After training, there are three ways to query the model.
+
+**Score all rows** — returns one prediction per row in the target table:
+
+```cpp
+std::vector<float> preds = trainer.predict_all(db, graph);
+```
+
+**Filter and aggregate** — apply row filters and return an aggregate:
+
+```cpp
+spec.inference_mode = TaskSpec::InferenceMode::RowBased;
+spec.inference_agg  = TaskSpec::AggType::Fraction;  // fraction of positives
+
+InferenceFilter f;
+f.column = "user_id";
+f.op     = "=";
+f.value  = "42";
+spec.inference_filters.push_back(f);
+
+auto result = spec.apply_inference(db, preds);
+// result.aggregate contains the fraction
+```
+
+**Entity synthesis** — score a specific combination of entities, including
+ones that do not exist as rows in any table:
+
+```cpp
+float p = trainer.synthesize_prediction(
+    {{"user_id", "42"}, {"product_id", "1337"}},
+    db, graph);
+```
+
+This looks up `h_UserInfo[42]` and `h_Product[1337]` from the GNN, mean-pools
+them, and passes the result through the MLP head. It works for any entity in
+the respective tables, including entities with no prior interactions — they
+have embeddings derived from their static features and their connections in
+the graph.
+
+---
+
+## Full example — regression on order value
+
+```cpp
+// Predict the total value of an order.
+
+std::unordered_map<std::string, TableSchema> schemas = {
+    {"users", {
+        .pkey_col = "user_id",
+        .columns  = {
+            {.name = "country",    .type = ColumnType::CATEGORICAL},
+            {.name = "signup_date",.type = ColumnType::TIMESTAMP},
+        }
+    }},
+    {"products", {
+        .pkey_col = "product_id",
+        .columns  = {
+            {.name = "name",     .type = ColumnType::TEXT},
+            {.name = "category", .type = ColumnType::CATEGORICAL},
+        }
+    }},
+    {"orders", {
+        .pkey_col     = "order_id",
+        .time_col     = "created_at",
+        .foreign_keys = {
+            {.column = "user_id",    .target_table = "users"},
+            {.column = "product_id", .target_table = "products"},
+        },
+        .columns = {}  // total_value inferred NUMERICAL, created_at inferred TIMESTAMP
+    }},
+};
+
+Database    db    = CSVLoader::load_database("./my-data", "mydb", schemas);
+FKDetector::detect(db);
+HeteroGraph graph = GraphBuilder::build(db);
+
+TaskSpec spec;
+spec.target_table  = "orders";
+spec.target_column = "total_value";
+spec.task_type     = TaskSpec::TaskType::Regression;
+
+// Normalize fits mean/std on training rows and inverse-transforms predictions
+spec.label_transform.kind = LabelTransform::Kind::Normalize;
+
+spec.split_strategy = TaskSpec::SplitStrategy::Temporal;
+spec.split_time_col = "created_at";
 
 TaskSplit split = spec.build_split(db);
-```
 
-`build_split` materializes the task table: it reads the rating column, applies the threshold to produce 0/1 labels, sorts all rows by timestamp, and cuts at 70% and 85% to produce train, val, and test sets. For the sample data above, the resulting task table looks like this:
+// Hide label from encoder
+db.get_table("orders").get_column("total_value").type = ColumnType::TEXT;
 
-```mermaid
-block-beta
-  columns 4
-  A["ratingId"]:1 B["label"]:1 C["split"]:1    D["note"]:1
-  A1["2"]:1       B1["1"]:1    C1["train"]:1    D1["earliest timestamp"]:1
-  A2["0"]:1       B2["1"]:1    C2["train"]:1    D2["rating=5 >= 4"]:1
-  A3["3"]:1       B3["0"]:1    C3["val"]:1      D3["rating=2 < 4"]:1
-  A4["1"]:1       B4["0"]:1    C4["test"]:1     D4["latest timestamp"]:1
-```
-
-**Step 4: Configure and train.**
-
-```cpp
 TrainConfig cfg;
 cfg.channels   = 64;
 cfg.gnn_layers = 2;
@@ -319,292 +380,225 @@ cfg.hidden     = 64;
 cfg.dropout    = 0.3f;
 cfg.lr         = 3e-4f;
 cfg.epochs     = 30;
-cfg.batch_size = 0;     // 0 = full batch
+cfg.batch_size = 0;
 cfg.task       = spec;
 
 Trainer trainer(cfg, db, graph);
 trainer.fit(split, db, graph);
+
+// Predictions are returned in the original scale (inverse of z-score)
+std::vector<float> preds = trainer.predict_all(db, graph);
 ```
 
-The trainer runs the full pipeline on every epoch: encode all nodes, run GNN message passing over the full graph, compute loss on the target table rows, backpropagate through the GNN and encoders, update all parameters with Adam. Validation metrics are printed after every epoch. The best checkpoint is saved and restored automatically.
+---
 
-**Step 5: Run inference.**
+## Full example — multiclass classification
 
 ```cpp
-// entity synthesis: predict for a specific (user, movie) pair
-// that may have no existing rating row
-float prob = trainer.synthesize_prediction(
-    {{"userId", "1"}, {"movieId", "1193"}}, db, graph);
-std::cout << "P(user 1 likes movie 1193) = " << prob << "\n";
+// Predict the outcome of a football match: 0 = home win, 1 = draw, 2 = away win.
+// The outcome column does not exist — we inject it from goals_home and goals_away.
 
-// row-based: score all existing rating rows, report the positive fraction
-std::vector<float> all_preds = trainer.predict_all(db, graph);
-TaskSpec::InferenceResult result = spec.apply_inference(db, all_preds);
-```
-
-That is the complete task. Define the schema. Define the task. Call fit. Learning happens automatically.
-
-
-## Schema Reference
-
-### TableSchema fields
-
-**pkey_col** — the primary key column name, or `std::nullopt`. Required for any table that other tables point to via a FK. Tables that are pure observation tables and are never themselves FK targets (like ratings or transactions) can have `std::nullopt`.
-
-**time_col** — the time column name for temporal splits, or `std::nullopt`. Must be either a Unix integer stored as NUMERICAL or a date string in YYYY-MM-DD format.
-
-**foreign_keys** — explicit FK declarations as a list of `{column, target_table}` pairs. If omitted, the FKDetector finds them automatically by name matching and value coverage verification. Explicit declaration is safer when coverage is lower than expected or naming conventions are irregular.
-
-**columns** — per-column type overrides. Only columns where automatic inference would give the wrong type need to be listed.
-
-### Column types
-
-**NUMERICAL** — z-score normalized to zero mean and unit variance. Statistics are computed from the training split only to prevent leakage. Use for real-valued measurements: age, price, rating value, duration.
-
-**CATEGORICAL** — one-hot encoded over the training vocabulary. Unseen values at inference time map to the all-zero vector. Use for columns with a bounded set of values: gender, country, occupation code, sales channel.
-
-**TIMESTAMP** — encoded as a 5-dimensional vector: sin and cos of month, sin and cos of day-of-month, and normalized year. The sin/cos representation places calendar time on a circle so December and January are adjacent in feature space. Use for date and datetime columns.
-
-**TEXT** — skipped by the encoder. Use for high-cardinality strings that would produce explosion in one-hot dimensions: names, descriptions, hashed identifiers, zip codes.
-
-If no override is declared, the inferrer applies these rules: all-numeric values become NUMERICAL, ISO 8601 date-shaped values become TIMESTAMP, string columns with unique-value ratio below 5% become CATEGORICAL, everything else becomes TEXT.
-
-
-## TaskSpec Reference
-
-### task_type
-
-**BinaryClassification** — predicts a probability between 0 and 1. Loss is binary cross-entropy with automatic positive-class reweighting. Use when the outcome has two values: liked/not liked, churned/active, defaulted/did not default.
-
-**Regression** — predicts a continuous value. Loss is mean squared error. The target is normalized during training and denormalized at inference. Use when you want to estimate a magnitude: price, duration, rating value.
-
-**MulticlassClassification** — predicts one of K classes. Loss is cross-entropy. Use when the outcome has more than two discrete values: star tier, price bucket, age group.
-
-### label_transform
-
-**Threshold** — converts raw value to 0 or 1.
-
-```cpp
-spec.label_transform.kind      = LabelTransform::Kind::Threshold;
-spec.label_transform.threshold = 4.f;
-spec.label_transform.inclusive = true;   // >= 4 is positive
-```
-
-**Normalize** — z-score normalizes the raw value. Used with Regression. Statistics are filled automatically by `build_split`.
-
-```cpp
-spec.label_transform.kind = LabelTransform::Kind::Normalize;
-```
-
-**Buckets** — maps raw value to a class index using sorted boundary values. Used with MulticlassClassification.
-
-```cpp
-spec.label_transform.kind    = LabelTransform::Kind::Buckets;
-spec.label_transform.buckets = {2.f, 3.5f};  // 3 classes: <2, 2-3.5, >3.5
-```
-
-### split_strategy
-
-**Temporal** — sorts by time column and cuts at 70% / 85%. This is the correct split whenever the data has timestamps. It simulates deployment: the model sees only past data during training and is evaluated on the future.
-
-**Random** — shuffles with a fixed seed before splitting. Use when there is no meaningful time ordering.
-
-### inference_mode
-
-**EntitySynthesis** — predicts for hypothetical entity combinations that may not exist as rows. Provide `entity_refs` as a map from FK column name to entity ID string. The system looks up the GNN embeddings of the referenced entities, averages them, and passes the pooled vector through the head.
-
-```cpp
-spec.inference_mode = TaskSpec::InferenceMode::EntitySynthesis;
-spec.entity_refs    = {{"userId", "5"}, {"movieId", "42"}};
-```
-
-**RowBased** — scores existing rows and aggregates the predictions. Provide `inference_filters` to restrict which rows are scored and `inference_agg` to combine the scores.
-
-```cpp
-spec.inference_mode = TaskSpec::InferenceMode::RowBased;
-spec.inference_agg  = TaskSpec::AggType::Fraction;
-
-InferenceFilter f;
-f.column = "userId";
-f.op     = "=";
-f.value  = "42";
-spec.inference_filters.push_back(f);
-```
-
-### inference_filters
-
-Each filter has three string fields: `column`, `op` (one of `=`, `!=`, `>`, `>=`, `<`, `<=`), and `value`. Multiple filters are ANDed together.
-
-### inference_agg
-
-**None** — return all per-row scores individually.
-
-**Fraction** — fraction of rows with predicted probability above 0.5. Use for *what proportion will churn?*
-
-**Mean** — average predicted value across matching rows. Use for *what is the expected like-probability for user 42?*
-
-**Count** — count of rows predicted positive. Use for *how many transactions will exceed $50?*
-
-
-## TrainConfig Reference
-
-**channels** — embedding dimensionality for every node in the graph. Primary memory knob. Approximate peak memory:
-
-```
-peak_memory = channels x total_rows x 4 bytes x gnn_layers x 6
-```
-
-```
-channels = 32    safe for datasets with millions of rows on 16 GB RAM
-channels = 64    good default for datasets up to ~1M rows
-channels = 128   for small datasets under 100K rows with ample RAM
-```
-
-**gnn_layers** — number of message-passing rounds. Two layers is the standard. Each additional layer extends the receptive field by one hop but adds proportionally to memory and risks over-smoothing.
-
-**hidden** — hidden layer width in the MLP head. Setting `hidden = channels` is a safe default.
-
-**dropout** — dropout probability in the MLP head during training. Values between 0.2 and 0.5 work for most tasks.
-
-**lr** — Adam learning rate. `3e-4` is a reliable default. Reduce to `1e-4` if training is unstable. Increase to `1e-3` if the loss barely moves in early epochs.
-
-**pos_weight** — positive-class weight in binary cross-entropy. Set to `1.0` to let the system compute it automatically as `n_negative / n_positive`. Essential for imbalanced tasks like churn.
-
-**epochs** — number of training passes. The best validation checkpoint is restored before test evaluation.
-
-**batch_size** — mini-batch size for the MLP head backward pass. `0` uses the full training set. The GNN always operates on the full graph regardless of this setting.
-
-
-## Injecting Synthetic Labels
-
-Some tasks require a label that does not exist as a column anywhere and must be derived from related tables. The churn task is the canonical example: no table has a `will_churn` column, so it is computed from transaction recency.
-
-The pattern is: compute the label, build a `Column` object with one entry per row in the target table, and add it before calling `build_split`.
-
-```cpp
-Column churn_col("will_churn", ColumnType::NUMERICAL);
-for (std::size_t i = 0; i < customer.num_rows(); ++i) {
-    double label = /* 1.0 if churned, 0.0 if active */;
-    churn_col.data.push_back(label);
+static void inject_outcome(Database& db) {
+    Table& games = db.get_table("games");
+    Column outcome("outcome", ColumnType::NUMERICAL);
+    for (std::size_t i = 0; i < games.num_rows(); ++i) {
+        double gh = /* read goals_home[i] */;
+        double ga = /* read goals_away[i] */;
+        outcome.data.push_back(gh > ga ? 0.0 : gh == ga ? 1.0 : 2.0);
+    }
+    games.add_column(std::move(outcome));
 }
 
-db.get_table("customer").add_column(std::move(churn_col));
+inject_outcome(db);
 
-spec.target_column = "will_churn";
+TaskSpec spec;
+spec.target_table  = "games";
+spec.target_column = "outcome";
+spec.task_type     = TaskSpec::TaskType::MulticlassClassification;
+
+// Buckets {0.5, 1.5} map raw values 0/1/2 to classes 0/1/2
+spec.label_transform.kind    = LabelTransform::Kind::Buckets;
+spec.label_transform.buckets = {0.5f, 1.5f};
+
+spec.split_strategy = TaskSpec::SplitStrategy::Temporal;
+spec.split_time_col = "date";
+
 TaskSplit split = spec.build_split(db);
+db.get_table("games").get_column("outcome").type = ColumnType::TEXT;
 ```
 
-The injected column must be NUMERICAL and must have exactly the same number of rows as the target table. This pattern is the C++ equivalent of a SQL WITH clause: any label expressible as an SPJA query over the database can be injected this way.
+---
 
+## Common mistakes
 
-## Running the Example Tasks
+**Forgetting to hide the label column.** If the target column is left as
+`NUMERICAL` after `build_split`, `HeteroEncoder` encodes it as a node feature.
+The model learns to copy the input to the output and achieves near-perfect
+training accuracy. Always flip the label column to `TEXT` after
+`build_split` returns.
+
+**Using a temporal split on a synthetic task table.** If you materialised a
+task table where the temporal logic is already baked into the label (a cutoff
+separates training evidence from the label), use `Random` split. A temporal
+split on such a table splits by the order rows were generated, which is
+arbitrary.
+
+**Leaving FK integer IDs as NUMERICAL on a synthetic task table.** A table
+like `UserAdCandidates(UserID, AdID, will_visit)` has only FK columns and a
+label. If `UserID` and `AdID` are left as `NUMERICAL`, the encoder z-scores
+the raw IDs and includes them as features. The model learns ID correlations
+that do not generalise. Override them to `TEXT` or flip after `GraphBuilder`.
+
+**Declaring `gnn_layers > 2`.** More layers cause over-smoothing on typical
+relational schemas. The signal you need is almost always within 2 hops.
+
+---
+
+## Building RelML
+
+### Prerequisites
+
+| Dependency | Required | Purpose |
+|---|---|---|
+| CMake >= 3.20 | yes | build system |
+| C++20 compiler | yes | clang++ 14+ or g++ 12+ |
+| libcurl | yes | Agent API calls |
+| OpenMP | recommended | multi-threaded training |
+| OpenBLAS | optional | faster matrix multiply |
+
+**macOS**
 
 ```bash
-cd build && cmake ..
+brew install cmake curl libomp openblas
+```
 
-# MovieLens 1M — predict whether a rating is >= 4 stars
-make ml1m_rating_classification -j$(nproc)
+**Ubuntu / Debian**
+
+```bash
+sudo apt install cmake libcurl4-openssl-dev libomp-dev libopenblas-dev
+```
+
+---
+
+### Configure and build
+
+```bash
+# from the project root
+mkdir build && cd build
+
+cmake .. -DCMAKE_BUILD_TYPE=Release
+
+make -j$(nproc)        # Linux
+make -j$(sysctl -n hw.logicalcpu)   # macOS
+```
+
+`-DCMAKE_BUILD_TYPE=Release` enables `-O3` optimisations. Without it the
+build defaults to `Debug` which is 5-10x slower for training.
+
+If CMake finds OpenBLAS it prints `BLAS found: ...` and compiles with
+`-DRELML_USE_BLAS`. If it finds OpenMP it links against it automatically.
+Both are detected without any flag from you.
+
+To build a specific target only:
+
+```bash
+make -j$(nproc) ml1m_rating_classification
+make -j$(nproc) avito_user_ad_visit
+make -j$(nproc) test_grad_check
+```
+
+---
+
+### Running an example task
+
+```bash
+# from the build directory
 ./ml1m_rating_classification ../ml-1m-data
 
-# H&M — predict which customers will churn in the next 7 days
-make hm_churn -j$(nproc)
-./hm_churn ../rel-hm-data
+./avito_user_ad_visit ../rel-avito-data
+
+# point query: will user 38950 visit ad 1938326 in the next 4 days?
+./avito_user_ad_visit ../rel-avito-data 38950 1938326
+
+./pl_outcome ../premiere-league-data
 ```
 
-Expected directory layouts:
+Data directories are passed as the first argument. The binary looks for
+CSV files directly inside that directory.
 
-```
-ml-1m-data/          rel-hm-data/
-    users.csv             customer.csv
-    movies.csv            article.csv
-    ratings.csv           transactions.csv
-```
+---
 
+### Running the gradient check
 
-## Adding a New Task
-
-Three steps.
+Run this once after any change to a backward pass to verify correctness:
 
 ```bash
-# 1. create the source file
-touch src/example_tasks/my_task.cpp
-
-# 2. add one line to CMakeLists.txt
-echo "add_relml_task(my_task  src/example_tasks/my_task.cpp)" >> CMakeLists.txt
-
-# 3. write the task (see walkthrough above)
+./test_grad_check
+# expected output: "All gradients correct."
 ```
 
-Every task follows the same structure: declare schemas, load and build graph, optionally inject labels, define TaskSpec, call build_split, configure TrainConfig, construct Trainer, call fit.
+---
 
+## Multi-threaded training
 
-## Natural Language Interface
+RelML parallelises the three most expensive operations using OpenMP:
 
-For interactive exploration without writing a task file, `test_system` accepts plain-English queries and uses an LLM to parse them into `TaskSpec` objects automatically:
+- `Linear::forward` and `Linear::backward` — matrix multiplies over N rows
+- `SAGELayer::forward` — neighbour sum accumulation and ReLU
+- `Adam::step` — parameter updates across all tensors
+
+No code change is needed. The number of threads is controlled at runtime via
+the standard OpenMP environment variable:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-./test_system ../ml-1m-data "What would user 5 rate movie 589?"
-./test_system ../ml-1m-data "What fraction of ratings are likely positive?"
-./test_system ../ml-1m-data "How does user 42 tend to rate movies?"
+# use all available cores (default if OMP_NUM_THREADS is not set)
+OMP_NUM_THREADS=$(nproc) ./ml1m_rating_classification ../ml-1m-data
+
+# use 4 threads
+OMP_NUM_THREADS=4 ./avito_user_ad_visit ../rel-avito-data
+
+# single-threaded (useful for reproducible timing benchmarks)
+OMP_NUM_THREADS=1 ./pl_outcome ../premiere-league-data
 ```
 
-Trained models are cached in `~/.relml/` indexed by a fingerprint of the task definition. Asking the same question a second time loads the saved weights and skips training.
+**Checking that OpenMP is active.**
+If CMake printed `Found OpenMP` during configure, it is active. To confirm
+at runtime:
 
-
-## Memory Requirements
-
-The dominant cost is GNN activation caches kept for backpropagation.
-
-```
-peak_memory = channels x total_rows_across_all_tables x 4 bytes x gnn_layers x 6
-```
-
-Concrete figures:
-
-```
-ml-1m  (~1M ratings + ~10K users and movies combined):
-    channels=64     ~1.5 GB
-    channels=128    ~6   GB
-
-rel-hm (~15M transactions + ~1.5M customers + ~105K articles):
-    channels=32     ~6   GB
-    channels=64     ~24  GB
-    channels=128    ~96  GB
+```bash
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release 2>&1 | grep -i openmp
+# should print: "Found OpenMP: TRUE ..."
 ```
 
-If you run out of memory, reduce `channels` first. Reducing `gnn_layers` from 2 to 1 halves the cache at the expense of shorter-range relational reasoning.
+If OpenMP was not found, all `#pragma omp parallel for` directives compile
+away silently and training runs single-threaded without errors.
 
+**BLAS acceleration.**
+When OpenBLAS is present, `Linear::forward` and `Linear::backward` use
+`cblas_sgemm` instead of the scalar fallback. This is the single largest
+speedup for large channel dimensions (128+). For channels=64 the improvement
+is modest. For channels=128 on MovieLens-1M it roughly halves epoch time.
 
-## Future Directions
+To verify BLAS is active:
 
-### DuckDB integration
-
-The current database layer — CSVLoader, TypeInferrer, FKDetector, Column, Table, Database — is approximately 800 lines of C++ that reimplements functionality available natively in DuckDB. A future version of RelML would replace this layer entirely:
-
-```cpp
-duckdb::DuckDB db;
-duckdb::Connection con(db);
-con.Query("CREATE TABLE ratings AS SELECT * FROM read_csv_auto('ratings.csv')");
+```bash
+cmake .. -DCMAKE_BUILD_TYPE=Release 2>&1 | grep -i blas
+# should print: "BLAS found: /path/to/libopenblas.dylib" or similar
 ```
 
-Type inference, CSV parsing, null handling, and FK detection all become SQL expressions. Synthetic label injection becomes a WITH clause. The HeteroEncoder would consume DuckDB result chunks directly instead of the custom Column struct.
+**Expected scaling.**
+On a machine with 8 physical cores and OpenBLAS:
 
-The GNN, prediction head, trainer, and optimizer would remain unchanged. The boundary between the relational layer and the learning layer is clean: the database produces typed feature matrices, the GNN consumes them. Swapping the database backend requires no changes to any learning code.
+| Dataset | Channels | Epochs | OMP=1 | OMP=8 |
+|---|---|---|---|---|
+| MovieLens-1M | 64 | 30 | ~180s | ~35s |
+| rel-avito (100k rows) | 64 | 20 | ~90s | ~20s |
+| Premier League | 32 | 600 | ~240s | ~55s |
 
-More importantly, this would make RelML deployable as a true database extension. The PREDICT verb would be registered as a custom function in DuckDB or PostgreSQL, allowing predictive queries to be issued directly alongside relational queries with no external tooling.
+The speedup is sublinear because the encoder and GNN forward passes
+parallelise well but the sequential scatter-gather in `mean_aggregate`
+(which cannot be parallelised due to write conflicts) becomes the bottleneck
+at high thread counts.
 
-### Neighbor sampling
-
-The current GNN runs full-graph message passing every epoch, so peak memory scales with total row count across all tables. For datasets with tens of millions of rows this is prohibitive. Neighbor sampling — loading only the k-hop neighborhood of each batch of target nodes rather than the full graph — would reduce peak memory from O(total nodes) to O(batch size x fanout^L), making very large relational databases trainable on modest hardware.
-
-### Text column encoding
-
-Columns of type TEXT are currently skipped. Encoding them with a pretrained language model would allow RelML to use movie titles, product descriptions, and customer notes as features without manual preprocessing, which is particularly valuable for article and product catalog tables.
-
-
-## References
-
-Robinson, J. et al. *RelBench: A Benchmark for Deep Learning on Relational Databases*. NeurIPS 2024.
-
-Hamilton, W. L., Ying, Z., Leskovec, J. *Inductive Representation Learning on Large Graphs* (GraphSAGE). NeurIPS 2017.
+---

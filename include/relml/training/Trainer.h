@@ -34,6 +34,14 @@ struct MSELoss {
 };
 
 struct CrossEntropyLoss {
+    // Per-class weights. If empty, all classes are weighted equally.
+    // Set automatically by Trainer::fit() from training label frequencies
+    // (inverse-frequency weighting, normalized so weights sum to K).
+    // Example for 3-class football (43% home / 23% draw / 33% away):
+    //   w[0] ≈ 0.78  w[1] ≈ 1.45  w[2] ≈ 1.01
+    // This forces the model to pay more attention to the minority draw class.
+    std::vector<float> class_weights;
+
     std::pair<float, std::vector<float>> forward_backward(
         const std::vector<float>& logits,
         const std::vector<float>& targets,
@@ -82,8 +90,6 @@ public:
     std::vector<float> predict_all(const Database& db, const HeteroGraph& graph);
 
     // Synthesize a prediction for a hypothetical entity combination.
-    // entity_refs maps FK column names (in target_table) to entity ID strings.
-    // Example: {"userId": "5", "movieId": "56"}
     float synthesize_prediction(
         const std::unordered_map<std::string, std::string>& entity_refs,
         const Database&    db,

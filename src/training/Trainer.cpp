@@ -61,6 +61,18 @@ std::pair<float, std::vector<float>> MSELoss::forward_backward(
 // CrossEntropyLoss
 // ---------------------------------------------------------------------------
 
+// Weighted cross-entropy forward + backward.
+//
+// Standard CE:    loss_i = -log(p[cls_i])
+// Weighted CE:    loss_i = -w[cls_i] * log(p[cls_i])
+//
+// Gradient w.r.t. logit k for sample i:
+//   Standard:  (softmax_k - 1[k==cls]) / N
+//   Weighted:  w[cls_i] * (softmax_k - 1[k==cls]) / N
+//
+// With inverse-frequency weights the minority class gets proportionally larger
+// gradient signal, preventing the model from ignoring rare outcomes entirely.
+// class_weights is populated automatically by Trainer::fit() when empty.
 std::pair<float, std::vector<float>> CrossEntropyLoss::forward_backward(
     const std::vector<float>& logits,
     const std::vector<float>& targets,
@@ -69,6 +81,8 @@ std::pair<float, std::vector<float>> CrossEntropyLoss::forward_backward(
     std::size_t N = targets.size();
     std::vector<float> d(N * K);
     float loss = 0.f;
+
+    bool use_weights = (class_weights.size() == K);
 
     for (std::size_t i = 0; i < N; ++i) {
         const float* row = logits.data() + i * K;
@@ -80,11 +94,13 @@ std::pair<float, std::vector<float>> CrossEntropyLoss::forward_backward(
         float log_sum_exp = std::log(sum_exp) + max_logit;
 
         std::size_t cls = static_cast<std::size_t>(targets[i]);
-        loss += log_sum_exp - row[cls];
+        float w = use_weights ? class_weights[cls] : 1.f;
+
+        loss += w * (log_sum_exp - row[cls]);
 
         for (std::size_t k = 0; k < K; ++k) {
             float softmax_k = std::exp(row[k] - max_logit) / sum_exp;
-            dr[k] = (softmax_k - (k == cls ? 1.f : 0.f)) / static_cast<float>(N);
+            dr[k] = w * (softmax_k - (k == cls ? 1.f : 0.f)) / static_cast<float>(N);
         }
     }
     return {loss / static_cast<float>(N), d};
@@ -248,8 +264,6 @@ float Trainer::forward_pass_batch(
 
 // ---------------------------------------------------------------------------
 // apply_output_transform
-// Converts a raw head logit to the final reported value in the original scale.
-// Called by both predict_all and synthesize_prediction so they stay in sync.
 // ---------------------------------------------------------------------------
 
 float Trainer::apply_output_transform(float raw) const {
@@ -301,7 +315,6 @@ EvalMetrics Trainer::evaluate(
             break;
         }
         case TaskSpec::TaskType::Regression:
-            // Evaluate in normalized space — both logits and labels are normalized during training.
             m = compute_regression_metrics(logits, y);
             m.loss = loss;
             break;
@@ -317,7 +330,6 @@ EvalMetrics Trainer::evaluate(
 
 // ---------------------------------------------------------------------------
 // predict_all
-// Scores every row in target_table. Returns values in the original scale.
 // ---------------------------------------------------------------------------
 
 std::vector<float> Trainer::predict_all(const Database& db, const HeteroGraph& graph) {
@@ -355,16 +367,6 @@ std::vector<float> Trainer::predict_all(const Database& db, const HeteroGraph& g
 
 // ---------------------------------------------------------------------------
 // synthesize_prediction
-// For queries about hypothetical entity combinations that have no existing row
-// (e.g. "what would user 5 rate movie 56?").
-//
-// The GNN has already produced embeddings for every user and every movie by
-// training on existing ratings. Here we look up the embeddings of the
-// referenced entities, mean-pool them (mimicking what a ratings node connecting
-// those entities would look like), and pass the result through the head.
-//
-// entity_refs: FK column in target_table -> entity ID string
-// e.g. {"userId": "5", "movieId": "56"}
 // ---------------------------------------------------------------------------
 
 float Trainer::synthesize_prediction(
@@ -443,12 +445,6 @@ float Trainer::synthesize_prediction(
 
 // ---------------------------------------------------------------------------
 // save_weights / load_weights
-//
-// Format:
-//   [n_params  : size_t]
-//   [norm_mean : float ]   -- always written; safe to ignore for non-normalize tasks
-//   [norm_std  : float ]
-//   for each parameter: [size : size_t] [data : float * size]
 // ---------------------------------------------------------------------------
 
 void Trainer::save_weights(const std::string& path) const {
@@ -514,6 +510,33 @@ EvalMetrics Trainer::fit(
         }
     }
 
+    // Auto-compute inverse-frequency class weights for multiclass tasks.
+    // w[k] = (N / K) / count[k], normalized so the average weight is 1.
+    // Example for football (43% home / 23% draw / 33% away):
+    //   w[0]=0.78  w[1]=1.45  w[2]=1.01
+    // The draw class gets ~2x the gradient signal of the home-win class,
+    // which stops the model from predicting draws only 8% of the time.
+    if (cfg_.task.task_type == TaskSpec::TaskType::MulticlassClassification
+        && ce_loss_.class_weights.empty())
+    {
+        std::size_t K = cfg_.task.output_dim();
+        std::vector<float> counts(K, 0.f);
+        for (const auto& s : task.train)
+            counts[static_cast<std::size_t>(s.label)] += 1.f;
+
+        float N_train = static_cast<float>(task.train.size());
+        ce_loss_.class_weights.resize(K);
+        std::cout << "  class_weights auto (home/draw/away): ";
+        for (std::size_t k = 0; k < K; ++k) {
+            ce_loss_.class_weights[k] = (counts[k] > 0.f)
+                ? (N_train / static_cast<float>(K)) / counts[k]
+                : 1.f;
+            std::cout << std::fixed << std::setprecision(3)
+                      << ce_loss_.class_weights[k]
+                      << (k + 1 < K ? "  " : "\n");
+        }
+    }
+
     EvalMetrics      best_val;
     std::vector<float> best_snapshot;
 
@@ -541,10 +564,14 @@ EvalMetrics Trainer::fit(
     if (batch_sz < n_train)
         std::cout << "  Mini-batch training: batch_size=" << batch_sz << "\n";
 
-    bool is_reg = (cfg_.task.task_type == TaskSpec::TaskType::Regression);
+    bool is_reg        = (cfg_.task.task_type == TaskSpec::TaskType::Regression);
+    bool is_multiclass = (cfg_.task.task_type == TaskSpec::TaskType::MulticlassClassification);
+
     std::cout << "\n" << std::string(88, '-') << "\n";
     if (is_reg)
         std::cout << " Epoch |  Train Loss  |  Val RMSE  |  Val MAE   |  Val R²  | Time (s)\n";
+    else if (is_multiclass)
+        std::cout << " Epoch |  Train Loss  |   Val Acc  |   Val F1  |           | Time (s)\n";
     else
         std::cout << " Epoch |  Train Loss  |   Val AP  |  Val AUC  |  Val Acc | Time (s)\n";
     std::cout << std::string(88, '-') << "\n";
@@ -587,15 +614,22 @@ EvalMetrics Trainer::fit(
             std::cout << std::setprecision(4) << val_m.rmse << "      | "
                       << val_m.mae << "     | "
                       << val_m.r2  << " | ";
+        else if (is_multiclass)
+            std::cout << std::setprecision(4) << val_m.accuracy << "    | "
+                      << val_m.f1       << "    |           | ";
         else
             std::cout << std::setprecision(4) << val_m.average_precision << "    | "
                       << val_m.roc_auc  << "    | "
                       << val_m.accuracy << " | ";
         std::cout << std::setprecision(2) << s << "\n";
 
-        bool improved = is_reg
-            ? (best_val.rmse == 0.f || val_m.rmse < best_val.rmse)
-            : (val_m.average_precision > best_val.average_precision);
+        bool improved;
+        if (is_reg)
+            improved = (best_val.rmse == 0.f || val_m.rmse < best_val.rmse);
+        else if (is_multiclass)
+            improved = (val_m.accuracy > best_val.accuracy);
+        else
+            improved = (val_m.average_precision > best_val.average_precision);
 
         if (improved) {
             best_val = val_m;

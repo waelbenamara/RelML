@@ -192,6 +192,9 @@ target_link_libraries(test_gnn relml_database relml_graph relml_encoding relml_g
 add_executable(test_training tests/test_training.cpp)
 target_link_libraries(test_training relml_training relml_gnn relml_encoding relml_graph relml_database stdc++fs)
 
+add_executable(test_grad_check tests/test_grad_check.cpp)
+target_link_libraries(test_grad_check relml_training relml_gnn relml_encoding relml_graph relml_database stdc++fs)
+
 add_executable(test_agent tests/test_agent.cpp)
 target_link_libraries(test_agent relml_agent)
 
@@ -204,3 +207,5 @@ target_link_libraries(test_system relml_agent stdc++fs)
 # ---------------------------------------------------------------------------
 add_relml_task(hm_churn                   src/example_tasks/hm_churn.cpp)
 add_relml_task(ml1m_rating_classification src/example_tasks/ml1m_rating_classification.cpp)
+add_relml_task(pl_outcome                 src/example_tasks/pl_outcome.cpp)
+add_relml_task(avito_user_ad_visit        src/example_tasks/avito_user_ad_visit.cpp)
