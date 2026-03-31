@@ -8,7 +8,7 @@
 using namespace relml;
 
 int main(int argc, char* argv[]) {
-    std::string data_dir = (argc > 1) ? argv[1] : "./ml-1m-data";
+    std::string data_dir = (argc > 1) ? argv[1] : "./data/ml-1m-data";
 
     std::unordered_map<std::string, TableSchema> schemas = {
         {"users",   {.pkey_col = "userId",

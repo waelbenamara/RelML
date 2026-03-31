@@ -11,6 +11,8 @@ all_code.txt
 
 # Build
 build/
+# Scratch or alternate out-of-source CMake trees (e.g. experimental configures)
+/build-*/
 
 # Python
 myenv/

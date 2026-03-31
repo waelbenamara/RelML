@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
 
-# On macOS, set SDK and compiler before project() so standard headers (e.g. <cstdint>) are found.
 if(APPLE)
   execute_process(
     COMMAND xcrun --show-sdk-path
@@ -13,6 +12,9 @@ if(APPLE)
 endif()
 
 project(relml VERSION 0.1.0 LANGUAGES CXX)
+
+# Static relml_* libs are linked into the Python extension (.so); require PIC.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,7 +35,7 @@ if(OpenMP_CXX_FOUND)
 endif()
 
 # ---------------------------------------------------------------------------
-# OpenBLAS — enables cblas_sgemm in Linear::forward/backward
+# OpenBLAS
 # ---------------------------------------------------------------------------
 find_package(BLAS QUIET)
 if(BLAS_FOUND)
@@ -44,7 +46,7 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# CUDA (optional) — GPU training and multi-GPU
+# CUDA (optional)
 # ---------------------------------------------------------------------------
 option(RELML_USE_CUDA "Build CUDA backend for GPU training" OFF)
   if(NOT CMAKE_CUDA_COMPILER)
@@ -76,12 +78,12 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# libcurl — required by the Agent module
+# libcurl
 # ---------------------------------------------------------------------------
 find_package(CURL REQUIRED)
 
 # ---------------------------------------------------------------------------
-# nlohmann/json — header-only, fetched automatically at configure time
+# nlohmann/json
 # ---------------------------------------------------------------------------
 include(FetchContent)
 FetchContent_Declare(
@@ -159,8 +161,7 @@ target_link_libraries(relml_agent PUBLIC
 )
 
 # ---------------------------------------------------------------------------
-# A convenience function so each example task only needs one line below.
-# It links the full relml stack and adds the stdc++fs shim automatically.
+# Convenience function for example tasks
 # ---------------------------------------------------------------------------
 function(add_relml_task target source)
     add_executable(${target} ${source})
@@ -203,9 +204,49 @@ target_link_libraries(test_system relml_agent stdc++fs)
 
 # ---------------------------------------------------------------------------
 # Example tasks
-# Each line is:  add_relml_task(<executable_name>  <source_file>)
 # ---------------------------------------------------------------------------
 add_relml_task(hm_churn                   src/example_tasks/hm_churn.cpp)
 add_relml_task(ml1m_rating_classification src/example_tasks/ml1m_rating_classification.cpp)
 add_relml_task(pl_outcome                 src/example_tasks/pl_outcome.cpp)
 add_relml_task(avito_user_ad_visit        src/example_tasks/avito_user_ad_visit.cpp)
+add_relml_task(sunnyside_demand           src/example_tasks/sunnyside_demand.cpp)
+add_relml_task(sunnyside_slots            src/example_tasks/sunnyside_slots.cpp)
+
+# ---------------------------------------------------------------------------
+# Python bindings (optional — only built when Python and pybind11 are available)
+#
+# DuckDB lives entirely on the Python side. The C++ binding receives plain
+# Python dicts — no DuckDB headers or library needed here.
+# ---------------------------------------------------------------------------
+find_package(Python COMPONENTS Interpreter Development)
+if(Python_FOUND)
+  FetchContent_Declare(
+      pybind11
+      URL https://github.com/pybind/pybind11/archive/refs/tags/v2.12.0.tar.gz
+      DOWNLOAD_EXTRACT_TIMESTAMP true
+  )
+  FetchContent_MakeAvailable(pybind11)
+
+  pybind11_add_module(_relml_core bindings/relml_python.cpp)
+  target_link_libraries(_relml_core PRIVATE
+      relml_training
+      relml_gnn
+      relml_encoding
+      relml_graph
+      relml_database
+  )
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(_relml_core PRIVATE OpenMP::OpenMP_CXX)
+  endif()
+
+  # Copy the built .so into the Python package directory so it is importable
+  # without an install step during development.
+  add_custom_command(TARGET _relml_core POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy
+          $<TARGET_FILE:_relml_core>
+          ${CMAKE_SOURCE_DIR}/python/guepard/qwery/relml/$<TARGET_FILE_NAME:_relml_core>
+  )
+  message(STATUS "Python bindings: enabled")
+else()
+  message(STATUS "Python bindings: disabled (Python not found)")
+endif()

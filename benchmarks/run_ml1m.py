@@ -8,15 +8,19 @@ gnn_entity.py pattern with this dataset (see README).
 
 Usage:
   python run_ml1m.py [--data-dir PATH] [--threshold 4.0]
-  RELBENCH_ML1M_DATA=/path/to/ml-1m-data python run_ml1m.py
+  RELBENCH_ML1M_DATA=/path/to/data/ml-1m-data python run_ml1m.py
 """
 
 import argparse
 import os
 import sys
+from pathlib import Path
 
 # Add benchmarks dir so we can import rel_ml1m
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+_REPO = Path(__file__).resolve().parents[1]
+_DEFAULT_ML1M = _REPO / "data" / "ml-1m-data"
 
 import numpy as np
 
@@ -30,7 +34,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=str,
-        default=os.environ.get("RELBENCH_ML1M_DATA", "ml-1m-data"),
+        default=os.environ.get("RELBENCH_ML1M_DATA", str(_DEFAULT_ML1M)),
         help="Path to directory containing users.csv, movies.csv, ratings.csv",
     )
     parser.add_argument(

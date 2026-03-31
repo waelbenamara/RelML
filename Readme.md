@@ -513,18 +513,20 @@ make -j$(nproc) test_grad_check
 
 ```bash
 # from the build directory
-./ml1m_rating_classification ../ml-1m-data
+./ml1m_rating_classification ../data/ml-1m-data
 
-./avito_user_ad_visit ../rel-avito-data
+./avito_user_ad_visit ../data/rel-avito-data
 
 # point query: will user 38950 visit ad 1938326 in the next 4 days?
-./avito_user_ad_visit ../rel-avito-data 38950 1938326
+./avito_user_ad_visit ../data/rel-avito-data 38950 1938326
 
-./pl_outcome ../premiere-league-data
+./pl_outcome ../data/premiere-league-data
 ```
 
 Data directories are passed as the first argument. The binary looks for
-CSV files directly inside that directory.
+CSV files directly inside that directory. In this repository, datasets live
+under `data/` (for example `data/ml-1m-data`, `data/rel-avito-data`); from
+`build/` use paths like `../data/ml-1m-data`.
 
 ---
 
@@ -552,13 +554,13 @@ the standard OpenMP environment variable:
 
 ```bash
 # use all available cores (default if OMP_NUM_THREADS is not set)
-OMP_NUM_THREADS=$(nproc) ./ml1m_rating_classification ../ml-1m-data
+OMP_NUM_THREADS=$(nproc) ./ml1m_rating_classification ../data/ml-1m-data
 
 # use 4 threads
-OMP_NUM_THREADS=4 ./avito_user_ad_visit ../rel-avito-data
+OMP_NUM_THREADS=4 ./avito_user_ad_visit ../data/rel-avito-data
 
 # single-threaded (useful for reproducible timing benchmarks)
-OMP_NUM_THREADS=1 ./pl_outcome ../premiere-league-data
+OMP_NUM_THREADS=1 ./pl_outcome ../data/premiere-league-data
 ```
 
 **Checking that OpenMP is active.**

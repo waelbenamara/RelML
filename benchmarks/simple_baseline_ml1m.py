@@ -8,10 +8,11 @@ Same feature encoding: numerical standardization, one-hot categoricals,
   of all three tables -- no relational message passing, no graph.
 
 Usage:
-    python baseline_mlp.py --data ./ml-1m
+    python simple_baseline_ml1m.py --data ./data/ml-1m-data
 """
 
 import argparse
+from pathlib import Path
 import time
 import numpy as np
 import pandas as pd
@@ -55,8 +56,10 @@ def temporal_split(X, y, r1=0.70, r2=0.85):
 
 
 def main():
+    _repo = Path(__file__).resolve().parents[1]
+    _default_data = _repo / "data" / "ml-1m-data"
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data",   default="./ml-1m-data")
+    parser.add_argument("--data",   default=str(_default_data))
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--hidden", default="128,64")
     parser.add_argument("--batch",  type=int, default=512)

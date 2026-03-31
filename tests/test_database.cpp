@@ -7,7 +7,7 @@
 using namespace relml;
 
 int main(int argc, char* argv[]) {
-    std::string data_dir = (argc > 1) ? argv[1] : "./rel-f1-data";
+    std::string data_dir = (argc > 1) ? argv[1] : "./data/rel-f1-data";
 
     // Only pkey and time_col need to be declared.
     // Column types and foreign keys are fully automatic.

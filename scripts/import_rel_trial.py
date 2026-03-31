@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Give a RelBench dataset name; the script downloads it and creates a folder
-of CSV files (one per table), e.g. rel-hm -> rel-hm-data/*.csv.
+of CSV files (one per table), e.g. rel-hm -> data/rel-hm-data/*.csv.
 
 Usage:
     python scripts/import_rel_trial.py <dataset_name>
@@ -16,7 +16,7 @@ from relbench.datasets import get_dataset, get_dataset_names
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Download a RelBench dataset and save each table as CSV in <dataset>-data/"
+        description="Download a RelBench dataset and save each table as CSV in data/<dataset>-data/"
     )
     parser.add_argument(
         "dataset",
@@ -28,7 +28,7 @@ if __name__ == "__main__":
         "--output-dir",
         type=str,
         default=None,
-        help="Folder for CSV files (default: <dataset>-data)",
+        help="Folder for CSV files (default: data/<dataset>-data under repo root)",
     )
     parser.add_argument("--list-datasets", action="store_true", help="List available dataset names and exit")
     args = parser.parse_args()
@@ -53,7 +53,12 @@ if __name__ == "__main__":
         sys.exit(1)
 
     db = dataset.get_db()
-    out_dir = Path(args.output_dir or f"{args.dataset}-data")
+    _repo_root = Path(__file__).resolve().parents[1]
+    out_dir = (
+        Path(args.output_dir)
+        if args.output_dir
+        else _repo_root / "data" / f"{args.dataset}-data"
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Saving {len(db.table_dict)} tables to {out_dir.absolute()}...")

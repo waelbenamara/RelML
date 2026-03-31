@@ -1065,7 +1065,7 @@ static void inject_form_features(Database& db,
 }
 
 int main(int argc, char* argv[]) {
-    std::string data_dir = (argc > 1) ? argv[1] : "./premiere-league-data";
+    std::string data_dir = (argc > 1) ? argv[1] : "./data/premiere-league-data";
 
     // -----------------------------------------------------------------------
     // Schema

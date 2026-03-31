@@ -150,7 +150,7 @@ static void print_label_stats(const TaskSplit& split) {
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
-    std::string data_dir = (argc > 1) ? argv[1] : "./ml-1m-data";
+    std::string data_dir = (argc > 1) ? argv[1] : "./data/ml-1m-data";
 
     std::cout << "Loading MovieLens-1M database from: " << data_dir << "\n";
     Database db = CSVLoader::load_database(data_dir, "ml-1m", ml1m_schemas());

@@ -8,7 +8,7 @@ Usage:
 
 Examples:
     python scripts/load_relbench_to_csv.py rel-hm --download
-    python scripts/load_relbench_to_csv.py rel-f1 --output-dir rel-f1-data --download
+    python scripts/load_relbench_to_csv.py rel-f1 --output-dir data/rel-f1-data --download
 """
 
 import argparse
@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 
 from relbench.datasets import get_dataset, get_dataset_names
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
@@ -31,7 +33,7 @@ def main():
         "--output-dir",
         type=str,
         default=None,
-        help="Directory for CSV files (default: <dataset>-data)",
+        help="Directory for CSV files (default: data/<dataset>-data under repo root)",
     )
     parser.add_argument(
         "--download",
@@ -61,7 +63,11 @@ def main():
         print("Use --list-datasets to see available names.", file=sys.stderr)
         return 1
 
-    out_dir = Path(args.output_dir or f"{args.dataset}-data")
+    out_dir = (
+        Path(args.output_dir)
+        if args.output_dir
+        else _REPO_ROOT / "data" / f"{args.dataset}-data"
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading {args.dataset} dataset...")

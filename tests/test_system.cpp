@@ -133,7 +133,7 @@ static Dataset detect_dataset(const std::string& dir) {
 // ---------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
-    std::string data_dir = (argc > 1) ? argv[1] : "./data";
+    std::string data_dir = (argc > 1) ? argv[1] : "./data/ml-1m-data";
 
     // Strip trailing slash for consistent path joins
     while (data_dir.size() > 1 && data_dir.back() == '/')

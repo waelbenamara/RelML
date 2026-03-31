@@ -12,23 +12,15 @@
 //       ), 0) AS will_visit
 //   FROM  VisitStream v
 //   LEFT JOIN VisitStream f
-//       ON  f.UserID   = v.UserID
-//       AND f.AdID     = v.AdID
+//       ON  f.UserID = v.UserID AND f.AdID = v.AdID
 //       AND f.ViewDate >= :cutoff
 //   WHERE v.ViewDate < :cutoff
 //   GROUP BY v.UserID, v.AdID
 //
-// where  cutoff = max(ViewDate) - PREDICTION_WINDOW_DAYS * 86400
-//
-// One row per (user, ad) pair the user visited BEFORE the cutoff.
-// Label = 1 if they visit the same ad again WITHIN the prediction window.
-// Label = 0 otherwise.
-//
-// This formulation is tractable: the number of rows equals the number of
-// distinct (user, ad) pairs in VisitStream before the cutoff — typically
-// in the hundreds of thousands, not billions. No negative sampling is needed
-// because the negatives are already defined by the query: every pair the user
-// visited but did not revisit is a natural negative.
+// Tables loaded (explicit — load_database would pick up SearchStream and
+// SearchInfo from the directory, adding 9M extra nodes and tripling memory):
+//   UserInfo, AdsInfo, Category, Location,
+//   VisitStream, PhoneRequestsStream, UserAdCandidates (synthetic)
 //
 // Usage:
 //   ./avito_user_ad_visit <data_dir>
@@ -45,105 +37,87 @@
 #include <iostream>
 #include <limits>
 #include <map>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 using namespace relml;
 
-static constexpr int PREDICTION_WINDOW_DAYS = 4;
+static constexpr int   PREDICTION_WINDOW_DAYS = 4;
+static constexpr float MAX_POS_WEIGHT         = 10.f;
 
 // ---------------------------------------------------------------------------
-// Schema
+// Schema definitions — one per table we actually want to load
 // ---------------------------------------------------------------------------
 
-static std::unordered_map<std::string, TableSchema> avito_schemas() {
+static TableSchema userinfo_schema() {
     return {
-        {"UserInfo", {
-            .pkey_col     = "UserID",
-            .time_col     = std::nullopt,
-            .foreign_keys = {},
-            .columns      = {}
-        }},
-        {"AdsInfo", {
-            .pkey_col     = "AdID",
-            .time_col     = std::nullopt,
-            .foreign_keys = {
-                {.column = "LocationID", .target_table = "Location"},
-                {.column = "CategoryID", .target_table = "Category"},
-            },
-            .columns = {
-                {.name = "Title",     .type = ColumnType::TEXT},
-                {.name = "IsContext", .type = ColumnType::CATEGORICAL},
-            }
-        }},
-        {"Category", {
-            .pkey_col     = std::optional<std::string>{"CategoryID"},
-            .time_col     = std::nullopt,
-            .foreign_keys = {},
-            .columns      = {{.name = "Level", .type = ColumnType::CATEGORICAL}}
-        }},
-        {"Location", {
-            .pkey_col     = std::optional<std::string>{"LocationID"},
-            .time_col     = std::nullopt,
-            .foreign_keys = {},
-            .columns      = {{.name = "Level", .type = ColumnType::CATEGORICAL}}
-        }},
-        {"SearchInfo", {
-            .pkey_col     = "SearchID",
-            .time_col     = "SearchDate",
-            .foreign_keys = {
-                {.column = "UserID",     .target_table = "UserInfo"},
-                {.column = "LocationID", .target_table = "Location"},
-                {.column = "CategoryID", .target_table = "Category"},
-            },
-            .columns = {
-                {.name = "IsUserLoggedOn", .type = ColumnType::CATEGORICAL},
-                {.name = "SearchQuery",    .type = ColumnType::TEXT},
-            }
-        }},
-        {"SearchStream", {
-            .pkey_col     = std::nullopt,
-            .time_col     = "SearchDate",
-            .foreign_keys = {
-                {.column = "SearchID", .target_table = "SearchInfo"},
-                {.column = "AdID",     .target_table = "AdsInfo"},
-            },
-            .columns = {
-                {.name = "ObjectType", .type = ColumnType::CATEGORICAL},
-                {.name = "IsClick",    .type = ColumnType::CATEGORICAL},
-            }
-        }},
-        {"VisitStream", {
-            .pkey_col     = std::nullopt,
-            .time_col     = "ViewDate",
-            .foreign_keys = {
-                {.column = "UserID", .target_table = "UserInfo"},
-                {.column = "AdID",   .target_table = "AdsInfo"},
-            },
-            .columns = {}
-        }},
-        {"PhoneRequestsStream", {
-            .pkey_col     = std::nullopt,
-            .time_col     = "PhoneRequestDate",
-            .foreign_keys = {
-                {.column = "UserID", .target_table = "UserInfo"},
-                {.column = "AdID",   .target_table = "AdsInfo"},
-            },
-            .columns = {}
-        }},
+        .pkey_col     = "UserID",
+        .time_col     = std::nullopt,
+        .foreign_keys = {},
+        .columns      = {}
+    };
+}
+
+static TableSchema adsinfo_schema() {
+    return {
+        .pkey_col     = "AdID",
+        .time_col     = std::nullopt,
+        .foreign_keys = {
+            {.column = "LocationID", .target_table = "Location"},
+            {.column = "CategoryID", .target_table = "Category"},
+        },
+        .columns = {
+            {.name = "Title",     .type = ColumnType::TEXT},
+            {.name = "IsContext", .type = ColumnType::CATEGORICAL},
+        }
+    };
+}
+
+static TableSchema category_schema() {
+    return {
+        .pkey_col     = std::optional<std::string>{"CategoryID"},
+        .time_col     = std::nullopt,
+        .foreign_keys = {},
+        .columns      = {{.name = "Level", .type = ColumnType::CATEGORICAL}}
+    };
+}
+
+static TableSchema location_schema() {
+    return {
+        .pkey_col     = std::optional<std::string>{"LocationID"},
+        .time_col     = std::nullopt,
+        .foreign_keys = {},
+        .columns      = {{.name = "Level", .type = ColumnType::CATEGORICAL}}
+    };
+}
+
+static TableSchema visitstream_schema() {
+    return {
+        .pkey_col     = std::nullopt,
+        .time_col     = "ViewDate",
+        .foreign_keys = {
+            {.column = "UserID", .target_table = "UserInfo"},
+            {.column = "AdID",   .target_table = "AdsInfo"},
+        },
+        .columns = {}
+    };
+}
+
+static TableSchema phonerequests_schema() {
+    return {
+        .pkey_col     = std::nullopt,
+        .time_col     = "PhoneRequestDate",
+        .foreign_keys = {
+            {.column = "UserID", .target_table = "UserInfo"},
+            {.column = "AdID",   .target_table = "AdsInfo"},
+        },
+        .columns = {}
     };
 }
 
 // ---------------------------------------------------------------------------
 // build_user_ad_candidates
-//
-// Executes the SPJA query and adds the resulting table to the database.
-//
-// UserID and AdID are stored as NUMERICAL so GraphBuilder can resolve them
-// against the NUMERICAL PKs of UserInfo and AdsInfo. After GraphBuilder runs,
-// call flip_candidate_ids_to_text() so HeteroEncoder skips them.
 // ---------------------------------------------------------------------------
 static void build_user_ad_candidates(Database& db) {
 
@@ -153,7 +127,6 @@ static void build_user_ad_candidates(Database& db) {
     const Column& date_col = visits.get_column("ViewDate");
     std::size_t   V        = visits.num_rows();
 
-    // Find cutoff
     int64_t max_ts = std::numeric_limits<int64_t>::min();
     for (std::size_t i = 0; i < V; ++i)
         if (!date_col.is_null(i))
@@ -166,8 +139,6 @@ static void build_user_ad_candidates(Database& db) {
               << "  Cutoff (-" << PREDICTION_WINDOW_DAYS
               << " days)      : " << cutoff << " (unix)\n";
 
-    // Collect future visits: (UserID, AdID) pairs with ViewDate >= cutoff.
-    // These are the positive labels.
     struct PairHash {
         std::size_t operator()(const std::pair<int64_t,int64_t>& p) const {
             std::size_t h = std::hash<int64_t>{}(p.first);
@@ -176,6 +147,8 @@ static void build_user_ad_candidates(Database& db) {
             return h;
         }
     };
+
+    // Positive pairs: (UserID, AdID) with ViewDate >= cutoff
     std::unordered_set<std::pair<int64_t,int64_t>, PairHash> future_visits;
     for (std::size_t i = 0; i < V; ++i) {
         if (date_col.is_null(i) || user_col.is_null(i) || ad_col.is_null(i))
@@ -187,10 +160,7 @@ static void build_user_ad_candidates(Database& db) {
         });
     }
 
-    // Collect distinct (UserID, AdID) pairs from VisitStream before the cutoff.
-    // These are the candidate rows — one per unique pair the user has visited.
-    // No sampling: every historical (user, ad) pair is a candidate.
-    // Negatives arise naturally: pairs not in future_visits get label 0.
+    // Candidate rows: distinct (UserID, AdID) from VisitStream before cutoff
     std::unordered_set<std::pair<int64_t,int64_t>, PairHash> historical_pairs;
     for (std::size_t i = 0; i < V; ++i) {
         if (date_col.is_null(i) || user_col.is_null(i) || ad_col.is_null(i))
@@ -204,7 +174,6 @@ static void build_user_ad_candidates(Database& db) {
 
     std::cout << "  Historical (user,ad) pairs: " << historical_pairs.size() << "\n";
 
-    // Assign labels and build column vectors
     std::vector<double> rows_user, rows_ad, rows_label;
     rows_user.reserve(historical_pairs.size());
     rows_ad.reserve(historical_pairs.size());
@@ -225,7 +194,6 @@ static void build_user_ad_candidates(Database& db) {
               << (total > 0 ? 100.f * n_pos / total : 0.f) << "%)\n"
               << "  Negatives               : " << (total - n_pos) << "\n";
 
-    // Build the Table with NUMERICAL columns for GraphBuilder FK resolution
     Table cand("UserAdCandidates");
     cand.foreign_keys = {
         {.column = "UserID", .target_table = "UserInfo"},
@@ -248,12 +216,6 @@ static void build_user_ad_candidates(Database& db) {
     db.add_table(std::move(cand));
 }
 
-// ---------------------------------------------------------------------------
-// flip_candidate_ids_to_text
-//
-// Called after GraphBuilder::build. Flips UserID and AdID to TEXT so
-// HeteroEncoder skips them. All signal flows through the FK edges.
-// ---------------------------------------------------------------------------
 static void flip_candidate_ids_to_text(Database& db) {
     Table& cand = db.get_table("UserAdCandidates");
     cand.get_column("UserID").type = ColumnType::TEXT;
@@ -298,8 +260,8 @@ static void print_top_k_per_user(
     std::map<int64_t, std::vector<std::pair<float, int64_t>>> user_preds;
     for (std::size_t i = 0; i < cand.num_rows() && i < all_preds.size(); ++i) {
         if (user_col.is_null(i) || ad_col.is_null(i)) continue;
-        int64_t uid = std::stoll(user_col.get_categorical(i));
-        int64_t aid = std::stoll(ad_col.get_categorical(i));
+        int64_t uid = static_cast<int64_t>(user_col.get_numerical(i));
+        int64_t aid = static_cast<int64_t>(ad_col.get_numerical(i));
         user_preds[uid].push_back({all_preds[i], aid});
     }
 
@@ -324,10 +286,6 @@ static void print_top_k_per_user(
 
 // ---------------------------------------------------------------------------
 // score_pair
-//
-// Exact lookup in UserAdCandidates first. Falls back to synthesize_prediction
-// for pairs not in the candidate set (e.g. a brand new ad the user has never
-// seen — the model scores it from category/location/popularity signal alone).
 // ---------------------------------------------------------------------------
 static float score_pair(
     int64_t                   query_user,
@@ -343,8 +301,8 @@ static float score_pair(
 
     for (std::size_t i = 0; i < cand.num_rows() && i < all_preds.size(); ++i) {
         if (user_col.is_null(i) || ad_col.is_null(i)) continue;
-        if (std::stoll(user_col.get_categorical(i)) == query_user &&
-            std::stoll(ad_col.get_categorical(i))   == query_ad)
+        if (static_cast<int64_t>(user_col.get_numerical(i)) == query_user &&
+            static_cast<int64_t>(ad_col.get_numerical(i))   == query_ad)
             return all_preds[i];
     }
 
@@ -359,10 +317,29 @@ static float score_pair(
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
-    std::string data_dir = (argc > 1) ? argv[1] : "./rel-avito-data";
+    std::string data_dir = (argc > 1) ? argv[1] : "./data/rel-avito-data";
 
-    std::cout << "Loading Avito database from: " << data_dir << "\n";
-    Database db = CSVLoader::load_database(data_dir, "rel-avito", avito_schemas());
+    // Load only the tables we need. Using load_database would pick up
+    // SearchStream (7.1M) and SearchInfo (1.9M) from the directory,
+    // tripling memory usage and epoch time.
+    std::cout << "Loading Avito database...\n";
+    Database db("rel-avito");
+
+    auto load = [&](const std::string& csv, const std::string& name,
+                    const TableSchema& schema) {
+        std::cout << "  " << csv << " ... ";
+        std::cout.flush();
+        Table t = CSVLoader::load_table(data_dir + "/" + csv, name, schema);
+        std::cout << t.num_rows() << " rows\n";
+        db.add_table(std::move(t));
+    };
+
+    load("UserInfo.csv",             "UserInfo",             userinfo_schema());
+    load("AdsInfo.csv",              "AdsInfo",              adsinfo_schema());
+    load("Category.csv",             "Category",             category_schema());
+    load("Location.csv",             "Location",             location_schema());
+    load("VisitStream.csv",          "VisitStream",          visitstream_schema());
+    load("PhoneRequestsStream.csv",  "PhoneRequestsStream",  phonerequests_schema());
 
     std::cout << "\nRunning FK detector...\n";
     auto detected = FKDetector::detect(db);
@@ -409,7 +386,11 @@ int main(int argc, char* argv[]) {
     cfg.hidden     = 64;
     cfg.dropout    = 0.3f;
     cfg.lr         = 3e-4f;
-    cfg.pos_weight = 1.f;
+    // pos_weight is auto-computed from training data but capped at MAX_POS_WEIGHT.
+    // The raw ratio is n_neg/n_pos ≈ 44 for this dataset. A weight of 44 is too
+    // aggressive — the loss gradient is so skewed that the model overshoots and
+    // produces AUC < 0.5 in early epochs. Cap at 10 to keep training stable.
+    cfg.pos_weight = MAX_POS_WEIGHT;
     cfg.epochs     = 20;
     cfg.batch_size = 4096;
     cfg.task       = spec;
@@ -429,7 +410,6 @@ int main(int argc, char* argv[]) {
 
     print_top_k_per_user(db, all_preds, /*top_k=*/5, /*max_users=*/10);
 
-    // Point query: ./avito_user_ad_visit <data_dir> <UserID> <AdID>
     if (argc >= 4) {
         int64_t query_user = std::stoll(argv[2]);
         int64_t query_ad   = std::stoll(argv[3]);

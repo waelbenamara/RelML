@@ -221,7 +221,7 @@ static void inject_churn_labels(Database& db) {
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
-    std::string data_dir = (argc > 1) ? argv[1] : "./rel-hm-data";
+    std::string data_dir = (argc > 1) ? argv[1] : "./data/rel-hm-data";
 
     std::cout << "Loading H&M database from: " << data_dir << "\n";
     Database db = CSVLoader::load_database(data_dir, "rel-hm", hm_schemas());

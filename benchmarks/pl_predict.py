@@ -7,6 +7,7 @@ Usage:
     python pl_predict.py <data_dir> --match "Arsenal vs Chelsea"
 
 Data dir must contain: games.csv, teams.csv, players.csv, player.csv
+Example (from repo root): python benchmarks/pl_predict.py data/premiere-league-data
 
 Model: LightGBM multiclass classifier (Home Win / Draw / Away Win)
 Features: rolling last-5 form, season table, head-to-head, days rest
